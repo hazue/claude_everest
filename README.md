@@ -1,54 +1,107 @@
 # Passenger Resource Management
 
-Stack (per the "Tech Stack" section of `projectspec.md`): React frontend (Vite), Node.js/Express backend,
-SQLite database. The backend uses the built-in `node:sqlite` module rather than `better-sqlite3`, since
-this avoids requiring native build tools (Visual Studio C++) to install — it runs anywhere Node 22.5+ is
-installed, with zero external services to stand up.
+A full-stack kiosk system for managing shared onboard resources (kayaks, sleeping pods,
+medical bays, etc.) gated by passenger tier. Passengers unlock/return resources at a
+physical card reader; Crew Leads manage passengers, resources, tiers, and audit history
+through a web console. Built to the spec in [`projectspec.md`](./projectspec.md).
 
-Generated from the prompts in `prompts.md`, based on `projectspec.md`.
+| | |
+|---|---|
+| **Frontend** | React 18 + Vite, React Router |
+| **Backend** | Node.js + Express |
+| **Database** | SQLite via the built-in `node:sqlite` module (no native build tools required) |
+| **Auth** | Access-card codes, bcrypt-hashed, session cookies with a 60s inactivity timeout |
 
-## Run it
+## Quick start
 
-```
+**1. Backend**
+```sh
 cd backend
 npm install
-npm run migrate   # applies src/migrations/*.sql
-npm run seed      # seeds from ../sampledata.sql (3 CrewLeads, 3 PassengerTiers, 9 Passengers, 7 Resources)
-npm run dev       # starts the API on :4000
-npm test          # runs unit tests (session expiry, access-code hashing, logger)
+npm run migrate   # applies backend/src/migrations/*.sql
+npm run seed      # seeds from sampledata.sql + passengerresourceusage_sample.sql
+npm run dev        # API on http://localhost:4000
 ```
 
-```
+**2. Frontend** (in a separate terminal)
+```sh
 cd frontend
 npm install
-npm run dev       # starts on :5173, proxies /api/* to http://localhost:4000
+npm run dev        # UI on http://localhost:5173, proxies /api to :4000
 ```
 
-Open `http://localhost:5173` in a browser.
+**3.** Open **http://localhost:5173**.
 
-Seeded raw access codes (for local testing only — DB stores bcrypt hashes, never the plaintext):
-- Crew Leads: `crewlead_a`, `crewlead_b`, `crewlead_c`
-- Passengers: `passenger_a` .. `passenger_i`
+**Run backend tests:**
+```sh
+cd backend && npm test
+```
 
-## Structure
+## Login credentials (seeded demo data)
 
-- `backend/src/logger.js` — plain-text, one-file-per-day logger writing to `backend/logs/` (gitignored),
-  per the "Extra Instructions" section of `projectspec.md`. Used by every route/middleware.
-- `backend/src/migrations/001_init.sql` — full schema (CrewLead, PassengerTier, Passenger, Resource,
-  PassengerResourceUsage, and the three audit tables), matching `projectspec.md` exactly.
-- `backend/src/seed.js` — seeds by executing `sampledata.sql` (repo root) directly against the DB.
-- `backend/src/lib/sessionStore.js` — in-memory session store with a 60-second inactivity timeout.
-- `backend/src/routes/auth.js` — separate Passenger/CrewLead login endpoints, logout, and a heartbeat
-  endpoint the client polls for the countdown timer (polling itself does not reset the inactivity clock).
-- `backend/src/routes/passenger.js` — read-only Profile/Resources/History endpoints.
-- `backend/src/routes/crewlead.js` — full CRUD for PassengerTier/Passenger/Resource (soft delete only,
-  with delete-blocking rules from the spec), manual lock/unlock, usage reports, and audit report views.
-- `backend/src/routes/hardware.js` — the 3 hardware-only endpoints (validate tier, start usage, end usage).
-  Per the spec, MAC-address filtering is enforced by the router/network layer, not this application.
-- `frontend/src/pages/*.jsx` — Passenger login/dashboard and Crew Lead login/dashboard React pages.
+Raw codes are shown here for local testing only — the database only ever stores a
+one-way bcrypt hash, never the plaintext.
 
-## Hardware endpoints
+| Role | Codes |
+|---|---|
+| Crew Lead | `crewlead_a`, `crewlead_b`, `crewlead_c` |
+| Passenger | `passenger_a` through `passenger_i` |
 
-`POST /api/hardware/validate-tier`, `POST /api/hardware/usage/start`, `POST /api/hardware/usage/end`.
-These bypass normal session auth (hardware doesn't log in) and are intended to be reachable only from
-the trusted intranet segment that the router's MAC allowlist restricts.
+## Features
+
+**Passenger** — Profile, Resources (tier-filtered, read-only), History (completed
+sessions only)
+
+**Crew Lead** — Passenger / Resource / Passenger Tier CRUD with soft-delete and
+delete-blocking rules, manual resource lock/unlock on a passenger's behalf, Usage
+Reports (by passenger / by resource, date-filterable), and Audit Logs (Passenger /
+Resource / Passenger Tier, including soft-deleted history)
+
+**Hardware** — 3 unauthenticated endpoints reachable only from the trusted intranet
+segment (MAC filtering is enforced by the router, not the app): validate tier, start
+usage, end usage
+
+## Project structure
+
+```
+backend/
+  src/
+    db.js                  SQLite connection + transaction helper
+    migrate.js / seed.js   schema migrations, demo data seeding
+    logger.js              plain-text, one-file-per-day request/mutation log
+    lib/
+      accessCode.js        bcrypt hashing + lookup for access cards
+      audit.js             writes to the 3 audit tables
+      sessionStore.js       in-memory sessions, 60s inactivity timeout
+    middleware/auth.js      session attach/require/role-check middleware
+    routes/
+      auth.js               login (Passenger + CrewLead), logout, heartbeat, touch
+      passenger.js          read-only Profile / Resources / History
+      crewlead.js           full CRUD, lock/unlock, reports, audit views
+      hardware.js           the 3 card-reader-only endpoints
+    migrations/001_init.sql full schema
+
+frontend/
+  src/
+    styles/tokens.css       design tokens (colors, type, both themes) shared by every page
+    components/             AppShell (nav), SessionGuard (idle modal), TierChip, StatusPill, ConfirmDialog
+    pages/
+      Login.jsx              shared Passenger/CrewLead login screen
+      passenger/             Profile, Resources, History
+      crewlead/               Passengers, Resources, Tiers, UsageReports, AuditLog (+ forms)
+```
+
+## Session security
+
+Sessions expire after 60 seconds of inactivity. Per the spec, nothing is shown for the
+first 50 seconds — only in the final 10 does a warning modal appear with a countdown,
+"Resume session," and "Log out." The heartbeat poll that drives this countdown is
+deliberately read-only server-side (`peekSession`); only genuine authenticated requests
+(`requireSession`) reset the idle clock, so polling alone can never keep a session alive.
+
+## Data files at the repo root
+
+- `sampledata.sql` / `passengerresourceusage_sample.sql` — seed data loaded by `npm run seed`
+- `newdummydata_20260806_0444.sql` — a full export of the live database at a point in
+  time (all 8 tables, FK-ordered), usable as an alternate seed file
+- `generated_prompts.md` — the UI build prompts the frontend was implemented from, cross-checked against `projectspec.md`
