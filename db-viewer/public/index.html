@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>SQLite DB Viewer</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 0; background: #0f1720; color: #e6edf3; }
+  .container { max-width: 1100px; margin: 0 auto; padding: 20px; }
+  h1 { font-size: 1.3rem; }
+  .layout { display: flex; gap: 20px; }
+  .sidebar { width: 200px; flex-shrink: 0; }
+  .main { flex: 1; min-width: 0; }
+  .table-btn { display: block; width: 100%; text-align: left; margin-bottom: 4px; background: #161d27; border: 1px solid #2a3542; color: #e6edf3; padding: 8px; border-radius: 6px; cursor: pointer; }
+  .table-btn:hover, .table-btn.active { background: #1f6feb; }
+  textarea { width: 100%; box-sizing: border-box; font-family: monospace; font-size: 0.95rem; background: #0f1720; color: #e6edf3; border: 1px solid #2a3542; border-radius: 6px; padding: 10px; }
+  button.run { background: #2f6feb; color: white; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; margin-top: 8px; }
+  table { border-collapse: collapse; width: 100%; margin-top: 12px; font-size: 0.85rem; }
+  th, td { border: 1px solid #2a3542; padding: 6px 8px; text-align: left; white-space: nowrap; }
+  th { background: #161d27; position: sticky; top: 0; }
+  .table-wrap { overflow: auto; max-height: 60vh; }
+  .error { color: #ff6b6b; margin-top: 8px; }
+  .meta { color: #9fb0c0; font-size: 0.85rem; margin-bottom: 12px; }
+  .status { color: #7ee08a; margin-top: 8px; }
+  .insert-form { margin-top: 8px; }
+  .insert-form .field { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .insert-form label { width: 180px; flex-shrink: 0; font-size: 0.85rem; }
+  .insert-form label .req { color: #ff6b6b; }
+  .insert-form label .hint { color: #9fb0c0; font-weight: normal; }
+  .insert-form input { flex: 1; }
+  button.insert { background: #2f9e6f; color: white; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; margin-top: 8px; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>SQLite DB Viewer</h1>
+  <div class="meta" id="dbFile"></div>
+  <div class="layout">
+    <div class="sidebar">
+      <h3>Tables</h3>
+      <div id="tableList"></div>
+    </div>
+    <div class="main">
+      <h3 id="insertHeading" style="display:none;"></h3>
+      <div id="insertForm" class="insert-form"></div>
+
+      <h3>Run SQL</h3>
+      <textarea id="sqlInput" rows="5" placeholder="SELECT * FROM Passenger;"></textarea>
+      <div>
+        <button class="run" id="runBtn">Run</button>
+      </div>
+      <div id="feedback"></div>
+      <div class="table-wrap"><div id="results"></div></div>
+    </div>
+  </div>
+</div>
+<script>
+async function api(path, options) {
+  const res = await fetch(path, options);
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.error || 'Request failed');
+  return body;
+}
+
+function renderRows(rows) {
+  const resultsEl = document.getElementById('results');
+  if (!rows || rows.length === 0) {
+    resultsEl.innerHTML = '<p>No rows.</p>';
+    return;
+  }
+  const cols = Object.keys(rows[0]);
+  const thead = `<tr>${cols.map((c) => `<th>${c}</th>`).join('')}</tr>`;
+  const tbody = rows
+    .map((r) => `<tr>${cols.map((c) => `<td>${r[c] === null ? 'NULL' : String(r[c])}</td>`).join('')}</tr>`)
+    .join('');
+  resultsEl.innerHTML = `<table><thead>${thead}</thead><tbody>${tbody}</tbody></table>`;
+}
+
+async function loadTables() {
+  const { tables } = await api('/api/tables');
+  const listEl = document.getElementById('tableList');
+  listEl.innerHTML = tables
+    .map((t) => `<button class="table-btn" data-table="${t}">${t}</button>`)
+    .join('');
+  listEl.querySelectorAll('.table-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      listEl.querySelectorAll('.table-btn').forEach((b) => b.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById('sqlInput').value = `SELECT * FROM ${btn.dataset.table};`;
+      await runQuery(`SELECT * FROM ${btn.dataset.table} LIMIT 500;`);
+      await renderInsertForm(btn.dataset.table);
+    });
+  });
+}
+
+async function renderInsertForm(tableName) {
+  const heading = document.getElementById('insertHeading');
+  const formEl = document.getElementById('insertForm');
+  heading.style.display = 'block';
+  heading.textContent = `Insert Row into ${tableName}`;
+
+  const { columns } = await api(`/api/tables/${encodeURIComponent(tableName)}/schema`);
+
+  const fields = columns
+    .map((c) => {
+      // Integer primary keys are almost always AUTOINCREMENT — leave them blank to let SQLite assign one.
+      const isAutoPk = c.primaryKey && /INTEGER/i.test(c.type || '');
+      const hint = isAutoPk ? 'auto-increment, leave blank' : c.defaultValue != null ? `default: ${c.defaultValue}` : '';
+      return `
+        <div class="field">
+          <label for="insert-${c.name}">${c.name}${c.notNull && !isAutoPk && c.defaultValue == null ? '<span class="req"> *</span>' : ''}${hint ? ` <span class="hint">(${hint})</span>` : ''}</label>
+          <input id="insert-${c.name}" data-col="${c.name}" placeholder="${c.type || ''}" />
+        </div>`;
+    })
+    .join('');
+
+  formEl.innerHTML = `${fields}<button class="insert" id="insertBtn">Insert Row</button>`;
+  document.getElementById('insertBtn').addEventListener('click', () => submitInsert(tableName));
+}
+
+async function submitInsert(tableName) {
+  const feedback = document.getElementById('feedback');
+  feedback.innerHTML = '';
+  const inputs = document.querySelectorAll('#insertForm input[data-col]');
+  const values = {};
+  inputs.forEach((input) => {
+    if (input.value !== '') values[input.dataset.col] = input.value;
+  });
+
+  try {
+    const result = await api(`/api/tables/${encodeURIComponent(tableName)}/rows`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ values }),
+    });
+    feedback.innerHTML = `<p class="status">Inserted. lastInsertRowid=${result.lastInsertRowid}</p>`;
+    await runQuery(`SELECT * FROM ${tableName} LIMIT 500;`);
+  } catch (err) {
+    feedback.innerHTML = `<p class="error">${err.message}</p>`;
+  }
+}
+
+async function runQuery(sqlOverride) {
+  const feedback = document.getElementById('feedback');
+  feedback.innerHTML = '';
+  const sql = sqlOverride || document.getElementById('sqlInput').value;
+  try {
+    const result = await api('/api/query', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sql }),
+    });
+    if (result.rows) {
+      renderRows(result.rows);
+      feedback.innerHTML = `<p class="status">${result.rows.length} row(s) returned.</p>`;
+    } else {
+      document.getElementById('results').innerHTML = '';
+      feedback.innerHTML = `<p class="status">OK. changes=${result.changes}, lastInsertRowid=${result.lastInsertRowid}</p>`;
+    }
+  } catch (err) {
+    feedback.innerHTML = `<p class="error">${err.message}</p>`;
+  }
+}
+
+document.getElementById('runBtn').addEventListener('click', () => runQuery());
+
+(async function init() {
+  const { dbFile } = await api('/api/db-file');
+  document.getElementById('dbFile').textContent = `Viewing: ${dbFile}`;
+  await loadTables();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,49 @@
+*NOT FOR AI PROMPT
+*Extra Description to explain why some decisions are made in the system design.
+
+----------------------------------------------
+
+Slide no.4
+"Exclusive Permissions. Provision and decommission ship resources"
+Resource will call backend API to validate passenger tier.
+For security purpose, Resource's MAC address will be controlled via router, not via This "Passenger Resource Management" project
+
+Slide no.6
+"Enforce safe limits to prevent unauthorized administrative expansion"
+There will be no Create function in the backend, thus there won't be more than 3 crew lead accounts.
+The initial 3 accounts are assumed to be inserted before system roll out (either via manual DB insertion or 1-time script)
+
+
+Slide no.7
+"Adminisrative tools for Crew Leads to upgrade or downgrade passenger levels based on mission requirements."
+While there is an upgrade/downgrade function of passenger tier, what exactly does "mission requirements" meant are not explained.
+If Payment is involved, assume it to be done via separate system.
+
+
+Slide no.7
+"Automatic recording of every resource interaction, creating a reliable audit trail for safety & reporting"
+While this will be mainly done via table "PassengerResourceUsage", 
+there will also be additional audit log for "passenger" data (e.g. when upgrade/downgrade was done),
+as well as audit log for "resource" changes (e.g. Crew Lead adding/deleting resources)
+
+
+----------------------------------------------
+
+Additional assumptions:
+
+There will be a Database table to store passengers data.
+But since passenger "profile" was NOT MENTIONED, no passenger's personal info will be stored in DB, nor anything to view from frontend.
+
+
+Crew Leads have administration rights, thus, a Crew Lead may lock/unlock a resource for a passenger to use.
+e.g. Passenger forgotten their access card in their own room, and Crew Leads recognise the passenger and help them to unlock the Resource Device
+
+
+Assume each Resource will always be used by only One Passenger.
+There won't be any validation done via the system to ensure each Resouce isn't used by multiple passengers.
+While it's possible to add the validation function, it just doesn't make sense in reality, and the validation could cause unnecessary overhead/blockage (e.g. Passenger cannot use Resource due to a bug in the validation)
+
+
+This system is used only in space ship that can't carry more than 10k humans.
+Thus traffic isn't heavy, things like NoSQL is not required.
+DDoS is not expected so no addictional security for it

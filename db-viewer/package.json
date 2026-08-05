@@ -1,0 +1,16 @@
+{
+  "name": "sqlite-db-viewer",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Small local tool to browse tables and run SQL against a node:sqlite database file",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}
